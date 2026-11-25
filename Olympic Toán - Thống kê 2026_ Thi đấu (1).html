@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Olympic Toán - Thống kê 2026: Thi đấu</title>
+<style>
+:root{--bg:#f8f5ff;--fg:#1d1240;--card:#fff;--ac:#7a3fe0;--gold:#f5b83d;--ok:#0b8f9a;--bad:#c0392b;--mut:#6b6290;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#140a38;--fg:#f2eeff;--card:#2b1370;--ac:#b18cff;--mut:#b9aee0;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#140a38;--fg:#f2eeff;--card:#2b1370;--ac:#b18cff;--mut:#b9aee0;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 "TeX Gyre Heros",Arial,sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:17px;margin:0 0 8px}
+.card{background:var(--card);border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:0 1px 4px #0003}
+.mut{color:var(--mut);font-size:14px}
+#tm{font-size:34px;font-weight:700;color:var(--ac)}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+button,input{font:inherit;border-radius:8px;border:1px solid var(--ac);padding:10px 14px;background:var(--card);color:var(--fg)}
+button{cursor:pointer;background:var(--ac);color:#fff;border:0}
+button:disabled{opacity:.45;cursor:default}
+.opts button{background:var(--card);color:var(--fg);border:1px solid var(--ac);text-align:left}
+input{width:60%;max-width:100%}
+table{width:100%;border-collapse:collapse}td,th{padding:6px 4px;text-align:left;border-bottom:1px solid #8883}
+.ok{color:var(--ok);font-weight:700}.bad{color:var(--bad);font-weight:700}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+</style></head>
+<body><main>
+<h1>Olympic Toán - Thống kê 2026</h1>
+<div class="mut" id="who">Đang kết nối...</div>
+<div id="join"></div>
+<div class="card"><div id="tm"></div><div id="qbox" class="mut">Chờ người điều khiển mở câu hỏi.</div></div>
+<div id="hostbox"></div>
+<div class="card"><h2>Bảng điểm</h2><div id="board"></div></div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script>
+(async()=>{
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function rich(s){return String(s==null?'':s).split(/\$([^$]+)\$/).map((p,i)=>{if(i%2===0)return esc(p);try{return window.katex?katex.renderToString(p,{output:'mathml',throwOnError:false}):esc(p)}catch(e){return esc(p)}}).join('')}
+let db,user,uid,host=false,S={q:-1,phase:'idle'},t0=0,lastRev=null,players={},scores={},live=[],closing=false;
+const [d,u]=await Promise.all([claude.use('db'),claude.use('user')]);
+if(!d||!u){$('who').textContent='Cần đăng nhập và được người điều khiển cấp quyền để vào phòng thi.';return}
+db=d;user=u;uid=await user.id();host=await user.isOwner();
+$('who').textContent=host?'Bạn là người điều khiển (MC).':'Bạn là thí sinh.';
+const sk=r=>'sent'+r;
+const wasSent=()=>{try{return localStorage.getItem(sk(S.rev))==='1'}catch(e){return false}};
+const markSent=()=>{try{localStorage.setItem(sk(S.rev),'1')}catch(e){}};
+const num=s=>{s=String(s).trim().replace(/\s/g,'').replace(',','.');let m=s.match(/^(-?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);if(m)return m[1]/m[2];let x=parseFloat(s);return isNaN(x)||!/^-?\d+(\.\d+)?$/.test(s)?null:x};
+const left=()=>S.phase==='open'?Math.max(0,S.min*60-(Date.now()-t0)/1000):0;
+
+function renderJoin(){
+  if(host||players[uid]){$('join').innerHTML='';return}
+  $('join').innerHTML='<div class="card"><h2>Nhập tên thi đấu</h2><input id="nm" maxlength="30" placeholder="Họ và tên"> <button id="nmb">Vào thi</button></div>';
+  $('nmb').onclick=()=>{const v=$('nm').value.trim();if(v)db.doc('players/'+uid).set({name:v})};
+}
+function renderQ(){
+  const b=$('qbox');
+  if(S.phase==='idle'||S.q<0){b.className='mut';b.textContent='Chờ người điều khiển mở câu hỏi.';return}
+  b.className='';
+  let h='<div class="mut">Câu '+(S.q+1)+'/10 · '+S.min+' phút · điểm theo thứ hạng 5, 4, 3, 2, 1</div><p>'+rich(S.text)+'</p>';
+  if(S.phase==='open'&&!host){
+    if(wasSent()){h+='<div class="ok">Đã nộp đáp án. Chờ hết giờ.</div>'}
+    else if(S.opts){h+='<div class="opts">'+S.opts.map((o,i)=>'<button data-v="'+'ABCD'[i]+'">'+'ABCD'[i]+'. '+rich(o)+'</button>').join('')+'</div>'}
+    else h+='<input id="av" placeholder="Đáp án" autocomplete="off"> <button id="avb">Nộp</button>';
+  }else if(S.opts)h+='<div class="mut">'+S.opts.map((o,i)=>'ABCD'[i]+'. '+rich(o)).join(' &nbsp; ')+'</div>';
+  if(S.phase==='reveal'){
+    const p=(scores['q'+S.q]&&scores['q'+S.q].pts&&scores['q'+S.q].pts[uid])||0;
+    h+='<p>Đáp án đúng: <span class="ok">'+rich(S.ans)+'</span></p>'+(host?'':'<p>Điểm câu này của bạn: <b>'+p+'</b></p>');
+  }
+  b.innerHTML=h;
+  b.querySelectorAll('.opts button').forEach(x=>x.onclick=()=>submit(x.dataset.v));
+  if($('avb'))$('avb').onclick=()=>submit($('av').value);
+  if($('av'))$('av').onkeydown=e=>{if(e.key==='Enter')submit($('av').value)};
+}
+async function submit(v){
+  v=String(v).trim();if(!v||host||wasSent()||left()<=0)return;
+  const el=Date.now()-t0;markSent();
+  try{await db.doc('answers/'+S.q+'_'+uid).set({q:S.q,rev:S.rev,uid,val:v,el})}catch(e){}
+  renderQ();
+}
+function renderBoard(){
+  const tot={};Object.values(scores).forEach(s=>Object.entries(s.pts||{}).forEach(([k,v])=>tot[k]=(tot[k]||0)+v));
+  const ids=Object.keys(players).sort((a,b)=>(tot[b]||0)-(tot[a]||0));
+  const cur=scores['q'+S.q]&&S.phase==='reveal'?scores['q'+S.q].pts||{}:null;
+  $('board').innerHTML=ids.length?'<table><tr><th>Thí sinh</th>'+(cur?'<th>Câu này</th>':'')+'<th>Tổng</th></tr>'+ids.map(k=>'<tr><td>'+esc(players[k])+(k===uid?' (bạn)':'')+'</td>'+(cur?'<td>'+(cur[k]||0)+'</td>':'')+'<td><b>'+(tot[k]||0)+'</b></td></tr>').join('')+'</table>':'<span class="mut">Chưa có thí sinh nào vào phòng.</span>';
+  renderJoin();
+}
+function renderHost(){
+  if(!host)return;
+  const n=live.filter(a=>a.q===S.q&&a.rev===S.rev).length;
+  const nx=S.phase==='idle'?0:S.q+1;
+  $('hostbox').innerHTML='<div class="card"><h2>Điều khiển</h2><div class="mut">'+(S.phase==='open'?'Đã nhận '+n+'/'+Object.keys(players).length+' đáp án.':'Thí sinh trong phòng: '+Object.keys(players).length)+'</div><div class="row"><button id="hn" '+(nx>9||S.phase==='open'?'disabled':'')+'>Mở câu '+(nx+1)+'</button><button id="hc" '+(S.phase==='open'?'':'disabled')+'>Chốt câu và chấm điểm</button><button id="hr">Làm lại từ đầu</button></div></div>';
+  $('hn').onclick=()=>openQ(nx);$('hc').onclick=()=>{closing=true;closeQ()};$('hr').onclick=resetAll;
+}
+async function openQ(i){
+  const q=(await db.doc('qs/q'+i).get()).data();if(!q)return;
+  await db.doc('game/state').set({q:i,phase:'open',rev:Date.now(),text:q.text,opts:q.opts||null,min:q.min});
+}
+async function closeQ(){
+  const k=(await db.doc('keys/q'+S.q).get()).data()||{};
+  const lim=S.min*60000+2000;
+  const good=live.filter(a=>a.q===S.q&&a.rev===S.rev&&a.el<=lim&&(k.ans?String(a.val).trim().toUpperCase()===k.ans:(x=>x!==null&&Math.abs(x-k.num)<=k.tol)(num(a.val)))).sort((a,b)=>a.el-b.el);
+  const pts={};good.slice(0,5).forEach((a,i)=>pts[a.uid]=5-i);
+  Object.keys(players).forEach(p=>{if(!(p in pts))pts[p]=0});
+  await db.doc('scores/q'+S.q).set({pts});
+  await db.doc('game/state').update({phase:'reveal',ans:k.show||k.ans||''});
+}
+async function resetAll(){
+  if(!confirm('Xóa toàn bộ điểm và bắt đầu lại?'))return;
+  for(const c of ['scores','answers']){const sn=await db.collection(c).get();for(const x of sn.docs)await db.doc(c+'/'+x.id).delete()}
+  await db.doc('game/state').set({q:-1,phase:'idle',rev:Date.now()});
+}
+const bad=e=>{$('who').textContent='Không đọc được dữ liệu: bạn cần được cấp quyền tham gia.'};
+db.doc('game/state').onSnapshot(s=>{S=s.exists?s.data():{q:-1,phase:'idle'};if(S.rev!==lastRev){lastRev=S.rev;t0=Date.now();closing=false}renderQ();renderHost();renderBoard()},bad);
+db.collection('players').onSnapshot(sn=>{players={};sn.docs.forEach(x=>players[x.id]=x.data().name);renderBoard();renderHost()},bad);
+db.collection('scores').onSnapshot(sn=>{scores={};sn.docs.forEach(x=>scores[x.id]=x.data());renderBoard();renderQ()},bad);
+if(host)db.collection('answers').onSnapshot(sn=>{live=sn.docs.map(x=>x.data());renderHost()},bad);
+setInterval(()=>{
+  const r=left(),tm=$('tm');
+  if(S.phase==='open'){const m=Math.floor(r/60),s=Math.floor(r%60);tm.textContent=m+':'+String(s).padStart(2,'0');
+    if(r<=0){tm.textContent='Hết giờ';if(host&&!closing){closing=true;closeQ()}}}
+  else tm.textContent='';
+},250);
+})();
+</script></body></html>
